@@ -4,13 +4,22 @@ import {
   ConfigurationBotFrameworkAuthenticationOptions,
   TurnContext,
   ActivityTypes,
+  CardFactory,
+  ConversationReference,
   Request as BotRequest,
   Response as BotResponse,
 } from "botbuilder";
 import { IncomingMessage, Server, ServerResponse, createServer } from "node:http";
-import type { BridgeMessage } from "./types";
+import type { BridgeMessage, MessageReply, CardActionData } from "./types";
 
-export type MessageHandler = (msg: BridgeMessage) => Promise<string>;
+/**
+ * Handler receives the message and a callback for sending extra replies
+ * (e.g. permission prompts) beyond the initial response.
+ */
+export type MessageHandler = (
+  msg: BridgeMessage,
+  sendExtra: (reply: MessageReply) => Promise<void>
+) => Promise<MessageReply>;
 
 /** Wrap Node.js IncomingMessage to satisfy the botbuilder Request interface. */
 function wrapRequest(req: IncomingMessage, body: Record<string, unknown>): BotRequest {
@@ -52,24 +61,105 @@ function wrapResponse(res: ServerResponse): BotResponse {
 export class BotServer {
   private server: Server | null = null;
   private adapter: CloudAdapter;
+  private appId: string;
+  private lastConversationRef: Partial<ConversationReference> | null = null;
+  private typingTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     appId: string,
     appPassword: string,
-    private readonly onMessage: MessageHandler
+    private readonly onMessage: MessageHandler,
+    private readonly onLog?: (msg: string) => void
   ) {
-    const authConfig: ConfigurationBotFrameworkAuthenticationOptions = {
-      MicrosoftAppId: appId,
-      MicrosoftAppPassword: appPassword,
-      MicrosoftAppType: "SingleTenant",
-    };
+    this.appId = appId;
+    const authConfig: ConfigurationBotFrameworkAuthenticationOptions =
+      appId && appPassword
+        ? {
+            MicrosoftAppId: appId,
+            MicrosoftAppPassword: appPassword,
+            MicrosoftAppType: "SingleTenant",
+          }
+        : {};
     const botAuth = new ConfigurationBotFrameworkAuthentication(authConfig);
     this.adapter = new CloudAdapter(botAuth);
 
     this.adapter.onTurnError = async (context, error) => {
-      console.error("[BotServer] Turn error:", error);
-      await context.sendActivity("Sorry, something went wrong.");
+      this.log(`Turn error: ${error}`);
+      try {
+        await context.sendActivity("Sorry, something went wrong.");
+      } catch (sendErr) {
+        this.log(`Failed to send error reply: ${sendErr}`);
+      }
     };
+  }
+
+  private log(msg: string): void {
+    this.onLog?.(`[Bot] ${msg}`);
+  }
+
+  /** Send a MessageReply (card or text) via the turn context. */
+  private async sendReply(
+    context: TurnContext,
+    reply: MessageReply
+  ): Promise<void> {
+    if (reply.card) {
+      await context.sendActivity({
+        attachments: [CardFactory.adaptiveCard(reply.card)],
+      });
+    } else if (reply.text) {
+      await context.sendActivity(reply.text);
+    }
+  }
+
+  /** Send a proactive message to the last known conversation. */
+  async sendProactive(reply: MessageReply): Promise<void> {
+    if (!this.lastConversationRef) {
+      this.log("No conversation reference for proactive message");
+      return;
+    }
+    try {
+      await this.adapter.continueConversationAsync(
+        this.appId,
+        this.lastConversationRef,
+        async (context) => {
+          await this.sendReply(context, reply);
+        }
+      );
+      this.log("Proactive message sent.");
+    } catch (err) {
+      this.log(`Proactive message error: ${err}`);
+    }
+  }
+
+  /** Start sending typing indicators every 3 seconds until stopTyping() is called. */
+  startTyping(): void {
+    this.stopTyping();
+    const sendOne = () => {
+      if (!this.lastConversationRef) {
+        return;
+      }
+      this.adapter
+        .continueConversationAsync(
+          this.appId,
+          this.lastConversationRef,
+          async (context) => {
+            await context.sendActivities([{ type: ActivityTypes.Typing }]);
+          }
+        )
+        .catch(() => {
+          /* ignore typing errors */
+        });
+    };
+    sendOne();
+    this.typingTimer = setInterval(sendOne, 3000);
+  }
+
+  /** Stop the repeating typing indicator. */
+  stopTyping(): void {
+    if (this.typingTimer) {
+      clearInterval(this.typingTimer);
+      this.typingTimer = null;
+    }
   }
 
   /** Start the HTTP server on the given port. */
@@ -84,18 +174,56 @@ export class BotServer {
             const wrappedReq = wrapRequest(req, body);
             const wrappedRes = wrapResponse(res);
 
-            void this.adapter.process(wrappedReq, wrappedRes, async (context: TurnContext) => {
-              if (
-                context.activity.type === ActivityTypes.Message &&
-                context.activity.text
-              ) {
-                const reply = await this.onMessage({
-                  text: context.activity.text,
-                  conversationId: context.activity.conversation.id,
-                });
-                await context.sendActivity(reply);
-              }
-            });
+            this.adapter
+              .process(wrappedReq, wrappedRes, async (context: TurnContext) => {
+                if (context.activity.type !== ActivityTypes.Message) {
+                  return;
+                }
+
+                // Save conversation reference for proactive messaging
+                this.lastConversationRef =
+                  TurnContext.getConversationReference(context.activity);
+
+                const text = context.activity.text ?? "";
+                const value = context.activity.value as
+                  | CardActionData
+                  | undefined;
+
+                if (!text && !value) {
+                  return;
+                }
+
+                // Send typing indicator so user knows we're working
+                await context.sendActivities([
+                  { type: ActivityTypes.Typing },
+                ]);
+
+                const sendExtra = async (reply: MessageReply) => {
+                  try {
+                    await this.sendReply(context, reply);
+                  } catch (err) {
+                    this.log(`sendExtra error: ${err}`);
+                  }
+                };
+
+                const reply = await this.onMessage(
+                  {
+                    text,
+                    conversationId: context.activity.conversation.id,
+                    value,
+                  },
+                  sendExtra
+                );
+
+                this.log(
+                  `Sending reply: ${reply.card ? "card" : (reply.text ?? "").slice(0, 80)}…`
+                );
+                await this.sendReply(context, reply);
+                this.log("Reply sent.");
+              })
+              .catch((err: unknown) => {
+                this.log(`adapter.process error: ${err}`);
+              });
           });
         } else {
           res.writeHead(404);
@@ -109,6 +237,7 @@ export class BotServer {
 
   /** Stop the HTTP server. */
   stop(): Promise<void> {
+    this.stopTyping();
     return new Promise((resolve, reject) => {
       if (!this.server) {
         resolve();
