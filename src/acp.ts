@@ -137,7 +137,12 @@ export class AcpClient extends EventEmitter {
   async initialize(): Promise<SessionResult> {
     const initRes = await this.sendRpc("initialize", {
       protocolVersion: 1,
-      clientCapabilities: {},
+      clientCapabilities: {
+        // Declare that we handle permission requests for all tool types,
+        // including file edits — ask the server to send session/request_permission
+        // for file operations, not just shell commands.
+        permissions: true,
+      },
     });
     if (initRes.error) {
       throw new Error(`ACP initialize failed: ${initRes.error.message}`);

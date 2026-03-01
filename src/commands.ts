@@ -305,28 +305,50 @@ export function formatToolCall(info: ToolCallInfo): string {
 }
 
 /** Build a completion card with action buttons after a prompt finishes. */
-export function buildCompletionActions(): Record<string, unknown> {
+export function buildCompletionActions(modeId?: string | null): Record<string, unknown> {
+  const inPlanMode = modeId ? /plan|architect/i.test(modeId) : false;
+
+  const actions = inPlanMode
+    ? [
+        {
+          type: "Action.Submit",
+          title: "🚀 Start Implementing",
+          data: { action: "command", command: "/implement" },
+        },
+        {
+          type: "Action.Submit",
+          title: "⚡ Autopilot",
+          data: { action: "command", command: "/autopilot" },
+        },
+        {
+          type: "Action.Submit",
+          title: "📄 View Plan",
+          data: { action: "command", command: "/viewplan" },
+        },
+        {
+          type: "Action.Submit",
+          title: "📊 Status",
+          data: { action: "command", command: "/status" },
+        },
+      ]
+    : [
+        {
+          type: "Action.Submit",
+          title: "🔄 Switch Mode",
+          data: { action: "command", command: "/mode" },
+        },
+        {
+          type: "Action.Submit",
+          title: "📊 Status",
+          data: { action: "command", command: "/status" },
+        },
+      ];
+
   return {
     $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
     type: "AdaptiveCard",
     version: "1.4",
-    actions: [
-      {
-        type: "Action.Submit",
-        title: "▶️ Continue",
-        data: { action: "command", command: "/continue" },
-      },
-      {
-        type: "Action.Submit",
-        title: "🔄 Switch Mode",
-        data: { action: "command", command: "/mode" },
-      },
-      {
-        type: "Action.Submit",
-        title: "📊 Status",
-        data: { action: "command", command: "/status" },
-      },
-    ],
+    actions,
   };
 }
 
@@ -425,6 +447,68 @@ export function buildCodeCard(text: string): Record<string, unknown> {
   }
 
   if (body.length === 0) {
+    body.push({ type: "TextBlock", text: text, wrap: true });
+  }
+
+  return {
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    type: "AdaptiveCard",
+    version: "1.6",
+    body,
+  };
+}
+
+/**
+ * Build an Adaptive Card that clearly labels the response as an implementation summary.
+ * Adds a header banner so users don't mistake it for a new plan or instructions.
+ */
+export function buildSummaryCard(text: string): Record<string, unknown> {
+  const body: Record<string, unknown>[] = [];
+
+  // Header — clearly marks this as a completed summary
+  body.push({
+    type: "ColumnSet",
+    columns: [
+      {
+        type: "Column",
+        width: "auto",
+        items: [{ type: "TextBlock", text: "✅", size: "Large" }],
+      },
+      {
+        type: "Column",
+        width: "stretch",
+        items: [
+          { type: "TextBlock", text: "Implementation Complete", weight: "Bolder", size: "Medium" },
+          { type: "TextBlock", text: "Summary of changes made", isSubtle: true, spacing: "None" },
+        ],
+      },
+    ],
+  });
+
+  // Separator
+  body.push({
+    type: "TextBlock",
+    text: " ",
+    spacing: "Small",
+    separator: true,
+  });
+
+  // Content — split into TextBlock and CodeBlock sections (same as buildCodeCard)
+  const parts = text.split(/(```[^\n]*\n[\s\S]*?```)/g);
+  for (const part of parts) {
+    const codeMatch = part.match(/^```([^\n]*)\n([\s\S]*?)```$/);
+    if (codeMatch) {
+      const langTag = codeMatch[1].trim().toLowerCase();
+      const code = codeMatch[2].trimEnd();
+      const language = LANG_MAP[langTag] ?? "PlainText";
+      body.push({ type: "CodeBlock", codeSnippet: code, language });
+    } else if (part.trim()) {
+      body.push({ type: "TextBlock", text: part.trim(), wrap: true });
+    }
+  }
+
+  if (body.length <= 2) {
+    // Only header + separator, no content parsed — show raw text
     body.push({ type: "TextBlock", text: text, wrap: true });
   }
 

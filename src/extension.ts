@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
 import { openTunnel } from "./tunnel";
 import { ConversationState } from "./state";
-import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard } from "./commands";
-import { buildPermissionCard, shortAlias } from "./cards";
+import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, buildSummaryCard, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard } from "./commands";
+import { buildPermissionCard, shortAlias, resolveModeAlias } from "./cards";
 import type { BridgeMessage, MessageReply, ToolCallInfo, PlanInfo, PermissionRequest, ModelInfo } from "./types";
 
 let botServer: BotServer | undefined;
@@ -37,6 +40,68 @@ async function handleTeamsMessage(
   // Handle Adaptive Card button clicks
   if (msg.value) {
     log(`Card action: ${JSON.stringify(msg.value)} (conversation: ${msg.conversationId})`);
+
+    // Intercept /implement and /autopilot from card buttons
+    const cmdName = msg.value.action === "command" ? msg.value.command : null;
+    if (cmdName === "/implement" || cmdName === "/autopilot") {
+      try {
+        // Switch to code/agent mode
+        const targetMode = resolveModeAlias("agent", conversationState.availableModes)
+          ?? resolveModeAlias("code", conversationState.availableModes);
+        if (targetMode) {
+          await acpClient.setMode(targetMode);
+          conversationState.setMode(targetMode);
+        }
+        if (cmdName === "/autopilot") {
+          conversationState.autoApprove = true;
+          await sendExtra({ text: "⚡ _Autopilot enabled — auto-approving all edits_" });
+        } else {
+          conversationState.autoApprove = false;
+        }
+
+        const promptText = "Start implementing the plan now. Make all the changes. " +
+          "When you are done, provide ONLY a concise summary of what was changed. " +
+          "List each file modified with a short description of the change. " +
+          "Do NOT repeat the step-by-step narration of what you did.";
+        const label = cmdName === "/autopilot"
+          ? "⚡ _Starting autopilot implementation…_"
+          : "🚀 _Starting implementation…_";
+
+        await sendExtra({ text: label });
+        botServer?.startTyping();
+        const raw = await acpClient.prompt(promptText);
+        botServer?.stopTyping();
+        const text = stripAnsi(raw);
+        log(`${cmdName} response: ${text.slice(0, 200)}…`);
+        await sendExtra({ card: buildSummaryCard(text) });
+        return { card: buildCompletionActions(conversationState.currentModeId) };
+      } catch (err: unknown) {
+        botServer?.stopTyping();
+        const message = err instanceof Error ? err.message : String(err);
+        return { text: `⚠️ Error: ${message}` };
+      }
+    }
+
+    // Intercept /viewplan — read plan.md from session state and display as CodeBlock
+    if (msg.value.action === "command" && msg.value.command === "/viewplan") {
+      if (!conversationState.sessionId) {
+        return { text: "⚠️ No active session." };
+      }
+      try {
+        const planPath = join(
+          homedir(),
+          ".copilot",
+          "session-state",
+          conversationState.sessionId,
+          "plan.md"
+        );
+        const content = await readFile(planPath, "utf-8");
+        return { card: buildCodeCard("```markdown\n" + content + "\n```") };
+      } catch {
+        return { text: "⚠️ No plan found for this session." };
+      }
+    }
+
     try {
       const result = await handleCardAction(msg.value, conversationState, acpClient);
       log(`Card action → ${(result.text ?? "card").slice(0, 100)}`);
@@ -89,30 +154,6 @@ async function handleTeamsMessage(
   // Check for slash commands
   const cmd = parseCommand(msg.text);
   if (cmd) {
-    // /continue is special — sends "continue" as a prompt to the agent
-    if (cmd.name === "continue") {
-      try {
-        await sendExtra({ text: "▶️ _Continuing…_" });
-        botServer?.startTyping();
-        const raw = await acpClient.prompt("continue");
-        botServer?.stopTyping();
-        const text = stripAnsi(raw);
-        log(`Continue response: ${text.slice(0, 200)}…`);
-        if (hasCodeBlocks(text)) {
-          await sendExtra({ card: buildCodeCard(text) });
-        } else {
-          const pages = paginateMessage(text);
-          for (const page of pages) {
-            await sendExtra({ text: page });
-          }
-        }
-        return { card: buildCompletionActions() };
-      } catch (err: unknown) {
-        botServer?.stopTyping();
-        const message = err instanceof Error ? err.message : String(err);
-        return { text: `⚠️ Error: ${message}` };
-      }
-    }
     try {
       const result = await handleCommand(cmd, conversationState, acpClient);
       log(`Command /${cmd.name} → ${(result.text ?? "card").slice(0, 100)}…`);
@@ -141,7 +182,7 @@ async function handleTeamsMessage(
       }
     }
     // Follow up with action buttons
-    return { card: buildCompletionActions() };
+    return { card: buildCompletionActions(conversationState.currentModeId) };
   } catch (err: unknown) {
     botServer?.stopTyping();
     const message = err instanceof Error ? err.message : String(err);
