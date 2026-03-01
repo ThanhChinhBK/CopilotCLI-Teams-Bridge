@@ -141,6 +141,16 @@ export interface PermissionOption {
   kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
 }
 
+// ─── Diff Content ───
+
+/** Diff content extracted from a tool call's content array. */
+export interface DiffContent {
+  type: "diff";
+  path: string;
+  oldText: string;
+  newText: string;
+}
+
 // ─── Adaptive Card Types ───
 
 /** Result from a command or message handler — can be text, a card, or both. */

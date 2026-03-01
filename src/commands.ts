@@ -7,6 +7,7 @@ import type {
   PermissionRequest,
   MessageReply,
   CardActionData,
+  DiffContent,
 } from "./types";
 import {
   shortAlias,
@@ -302,6 +303,226 @@ export function formatToolCall(info: ToolCallInfo): string {
   }
 
   return msg;
+}
+
+// ─── Diff Display ───
+
+/** A single line in a diff result. */
+interface DiffLine {
+  type: "context" | "add" | "remove";
+  text: string;
+}
+
+/** Extract DiffContent from a tool call's content array, if present. */
+export function extractDiffContent(info: ToolCallInfo): DiffContent | null {
+  if (!info.content) { return null; }
+  for (const item of info.content) {
+    if (item.type === "diff" && typeof item.oldText === "string" && typeof item.newText === "string" && typeof item.path === "string") {
+      return item as unknown as DiffContent;
+    }
+  }
+  return null;
+}
+
+/**
+ * Greedy two-pointer line diff with lookahead.
+ * Tags each output line as context, add, or remove.
+ */
+export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+  const result: DiffLine[] = [];
+  const LOOKAHEAD = 10;
+
+  let oi = 0;
+  let ni = 0;
+
+  while (oi < oldLines.length && ni < newLines.length) {
+    if (oldLines[oi] === newLines[ni]) {
+      result.push({ type: "context", text: oldLines[oi] });
+      oi++;
+      ni++;
+      continue;
+    }
+
+    // Look ahead in newLines for a match with oldLines[oi]
+    let foundNew = -1;
+    for (let j = ni + 1; j < Math.min(ni + LOOKAHEAD, newLines.length); j++) {
+      if (newLines[j] === oldLines[oi]) { foundNew = j; break; }
+    }
+
+    // Look ahead in oldLines for a match with newLines[ni]
+    let foundOld = -1;
+    for (let j = oi + 1; j < Math.min(oi + LOOKAHEAD, oldLines.length); j++) {
+      if (oldLines[j] === newLines[ni]) { foundOld = j; break; }
+    }
+
+    if (foundNew !== -1 && (foundOld === -1 || (foundNew - ni) <= (foundOld - oi))) {
+      // Lines were added in new
+      for (let j = ni; j < foundNew; j++) {
+        result.push({ type: "add", text: newLines[j] });
+      }
+      ni = foundNew;
+    } else if (foundOld !== -1) {
+      // Lines were removed from old
+      for (let j = oi; j < foundOld; j++) {
+        result.push({ type: "remove", text: oldLines[j] });
+      }
+      oi = foundOld;
+    } else {
+      // No match found — treat as remove old + add new
+      result.push({ type: "remove", text: oldLines[oi] });
+      result.push({ type: "add", text: newLines[ni] });
+      oi++;
+      ni++;
+    }
+  }
+
+  // Remaining old lines are removals
+  while (oi < oldLines.length) {
+    result.push({ type: "remove", text: oldLines[oi] });
+    oi++;
+  }
+  // Remaining new lines are additions
+  while (ni < newLines.length) {
+    result.push({ type: "add", text: newLines[ni] });
+    ni++;
+  }
+
+  return result;
+}
+
+/**
+ * Collapse runs of >maxRun consecutive context lines to a summary placeholder,
+ * keeping the first and last context line of each run.
+ */
+export function collapseContext(lines: DiffLine[], maxRun: number = 3): DiffLine[] {
+  const result: DiffLine[] = [];
+  let contextRun: DiffLine[] = [];
+
+  function flushContext(): void {
+    if (contextRun.length <= maxRun) {
+      result.push(...contextRun);
+    } else {
+      result.push(contextRun[0]);
+      result.push({ type: "context", text: `... (${contextRun.length - 2} lines unchanged)` });
+      result.push(contextRun[contextRun.length - 1]);
+    }
+    contextRun = [];
+  }
+
+  for (const line of lines) {
+    if (line.type === "context") {
+      contextRun.push(line);
+    } else {
+      if (contextRun.length > 0) { flushContext(); }
+      result.push(line);
+    }
+  }
+  if (contextRun.length > 0) { flushContext(); }
+
+  return result;
+}
+
+const MAX_DIFF_LINES = 50;
+
+/**
+ * Build an Adaptive Card showing a colored diff for a file edit.
+ * Returns null if the tool call has no diff content.
+ */
+export function buildDiffCard(info: ToolCallInfo): Record<string, unknown> | null {
+  const diff = extractDiffContent(info);
+  if (!diff) { return null; }
+
+  const rawLines = computeLineDiff(diff.oldText, diff.newText);
+  let lines = collapseContext(rawLines);
+
+  let truncated = false;
+  if (lines.length > MAX_DIFF_LINES) {
+    lines = lines.slice(0, MAX_DIFF_LINES);
+    truncated = true;
+  }
+
+  // Status icon
+  const statusIcons: Record<string, string> = {
+    pending: "⏳",
+    in_progress: "🔧",
+    completed: "✅",
+    failed: "❌",
+  };
+  const statusIcon = statusIcons[info.status ?? ""] ?? "🔧";
+
+  // Status verb
+  const statusVerb: Record<string, string> = {
+    pending: "Editing",
+    in_progress: "Editing",
+    completed: "Edited",
+    failed: "Failed",
+  };
+  const verb = statusVerb[info.status ?? ""] ?? "Editing";
+
+  const fileName = diff.path.split("/").pop() ?? diff.path;
+
+  // Build diff lines as compact TextBlocks inside a Container
+  const diffItems = lines.map((line, i) => {
+    const prefix = line.type === "add" ? "+ " : line.type === "remove" ? "- " : "  ";
+    const color = line.type === "add" ? "good" : line.type === "remove" ? "attention" : "default";
+    const weight = line.type === "context" ? "Default" : "Bolder";
+    return {
+      type: "TextBlock",
+      text: prefix + (line.text || " "),
+      wrap: false,
+      fontType: "Monospace",
+      size: "Small",
+      color,
+      weight,
+      spacing: i === 0 ? "Small" : "None",
+    };
+  });
+
+  const body: Record<string, unknown>[] = [
+    // Header
+    {
+      type: "ColumnSet",
+      columns: [
+        {
+          type: "Column",
+          width: "auto",
+          items: [{ type: "TextBlock", text: `${statusIcon} ✏️`, size: "Large" }],
+        },
+        {
+          type: "Column",
+          width: "stretch",
+          items: [
+            { type: "TextBlock", text: `${verb} ${fileName}`, weight: "Bolder", size: "Medium" },
+            { type: "TextBlock", text: diff.path, isSubtle: true, spacing: "None", size: "Small" },
+          ],
+        },
+      ],
+    },
+    // Diff lines — compact container with no inter-line spacing
+    {
+      type: "Container",
+      style: "emphasis",
+      items: diffItems,
+    },
+  ];
+
+  if (truncated) {
+    body.push({
+      type: "TextBlock",
+      text: `_... (${rawLines.length - MAX_DIFF_LINES} more lines not shown)_`,
+      isSubtle: true,
+      spacing: "Small",
+    });
+  }
+
+  return {
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    type: "AdaptiveCard",
+    version: "1.5",
+    body,
+  };
 }
 
 /** Build a completion card with action buttons after a prompt finishes. */

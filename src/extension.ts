@@ -6,7 +6,7 @@ import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
 import { openTunnel } from "./tunnel";
 import { ConversationState } from "./state";
-import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, buildSummaryCard, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard } from "./commands";
+import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, buildSummaryCard, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent } from "./commands";
 import { buildPermissionCard, shortAlias, resolveModeAlias } from "./cards";
 import type { BridgeMessage, MessageReply, ToolCallInfo, PlanInfo, PermissionRequest, ModelInfo } from "./types";
 
@@ -232,6 +232,9 @@ async function startBridge(): Promise<void> {
       (sessionResult.models?.currentModelId ? ` Model: ${sessionResult.models.currentModelId}` : "")
   );
 
+  // Track which edit tool calls have already sent a diff card (dedup across status updates)
+  const sentDiffToolCallIds = new Set<string>();
+
   // Subscribe to rich ACP events — send to Teams proactively
   acpClient.on("toolCall", (info: ToolCallInfo) => {
     const msg = formatToolCall(info);
@@ -241,6 +244,33 @@ async function startBridge(): Promise<void> {
     if (info.status === "pending" && id.includes("permission")) {
       return;
     }
+
+    // For edit tool calls with diff content, show a diff card (once per toolCallId)
+    if (info.kind === "edit" && id) {
+      // On failure, always send text with error regardless of prior diff card
+      if (info.status === "failed") {
+        if (botServer) {
+          void botServer.sendProactive({ text: msg });
+        }
+        return;
+      }
+
+      const hasDiff = extractDiffContent(info) !== null;
+      if (hasDiff) {
+        if (sentDiffToolCallIds.has(id)) {
+          // Already sent a diff card for this edit — suppress duplicate
+          return;
+        }
+        const card = buildDiffCard(info);
+        if (card && botServer) {
+          sentDiffToolCallIds.add(id);
+          void botServer.sendProactive({ card });
+          return;
+        }
+      }
+      // No diff content — fall through to text
+    }
+
     if (botServer) {
       void botServer.sendProactive({ text: msg });
     }
