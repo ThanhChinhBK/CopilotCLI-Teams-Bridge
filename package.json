@@ -69,6 +69,9 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "@microsoft/dev-tunnels-connections": "^1.0.0",
+    "@microsoft/dev-tunnels-contracts": "^1.0.0",
+    "@microsoft/dev-tunnels-management": "^1.0.0",
     "botbuilder": "^4.23.0",
     "botframework-connector": "^4.23.0"
   }

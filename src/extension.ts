@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
-import { openTunnel } from "./tunnel";
+import { openTunnel, closeTunnel, initTunnel } from "./tunnel";
 import { ConversationState } from "./state";
 import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent } from "./commands";
 import { buildPermissionCard, shortAlias, resolveModeAlias } from "./cards";
@@ -358,6 +358,7 @@ async function stopBridge(): Promise<void> {
   }
 
   log("Stopping bridge…");
+  await closeTunnel();
   acpClient?.stop();
   acpClient = undefined;
   conversationState = undefined;
@@ -373,6 +374,7 @@ async function stopBridge(): Promise<void> {
 
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("CopilotCLI-Teams Bridge");
+  initTunnel(context.globalState, log);
 
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -391,6 +393,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  closeTunnel().catch(() => {});
   if (acpClient) {
     acpClient.stop();
     acpClient = undefined;
