@@ -332,36 +332,44 @@ async function startBridge(): Promise<void> {
   await botServer.start(port);
   log(`Bot server listening on port ${port}.`);
 
-  // Open Dev Tunnel
-  try {
-    const { uri: tunnelUri, isNew } = await openTunnel(port);
-    const endpoint = `${tunnelUri.toString()}/api/messages`;
-    log(`Dev Tunnel URL: ${tunnelUri.toString()}`);
-    if (isNew) {
-      log("──────────────────────────────────────────────────────────");
-      log("NEW TUNNEL CREATED — one-time setup required:");
-      log(`  1. Go to Azure Bot → Settings → Configuration`);
-      log(`  2. Set Messaging endpoint to: ${endpoint}`);
-      log(`  3. Save. This URL is persistent and won't change across restarts.`);
-      log("──────────────────────────────────────────────────────────");
+  // Open Dev Tunnel only when App ID/Password are configured (Teams mode).
+  // In debug mode, skip the tunnel — localhost is sufficient for local testing.
+  if (appId && appPassword) {
+    try {
+      const { uri: tunnelUri, isNew } = await openTunnel(port);
+      const endpoint = `${tunnelUri.toString()}/api/messages`;
+      log(`Dev Tunnel URL: ${tunnelUri.toString()}`);
+      if (isNew) {
+        log("──────────────────────────────────────────────────────────");
+        log("NEW TUNNEL CREATED — one-time setup required:");
+        log(`  1. Go to Azure Bot → Settings → Configuration`);
+        log(`  2. Set Messaging endpoint to: ${endpoint}`);
+        log(`  3. Save. This URL is persistent and won't change across restarts.`);
+        log("──────────────────────────────────────────────────────────");
+        vscode.window.showWarningMessage(
+          `New tunnel created. Set your Azure Bot messaging endpoint to: ${endpoint}`,
+          "Copy URL"
+        ).then((choice) => {
+          if (choice === "Copy URL") {
+            vscode.env.clipboard.writeText(endpoint);
+          }
+        });
+      } else {
+        vscode.window.showInformationMessage(
+          `Bridge running. Tunnel: ${endpoint}`
+        );
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`Tunnel error: ${message}`);
       vscode.window.showWarningMessage(
-        `New tunnel created. Set your Azure Bot messaging endpoint to: ${endpoint}`,
-        "Copy URL"
-      ).then((choice) => {
-        if (choice === "Copy URL") {
-          vscode.env.clipboard.writeText(endpoint);
-        }
-      });
-    } else {
-      vscode.window.showInformationMessage(
-        `Bridge running. Tunnel: ${endpoint}`
+        `Bridge running locally on port ${port}, but Dev Tunnel failed: ${message}`
       );
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    log(`Tunnel error: ${message}`);
-    vscode.window.showWarningMessage(
-      `Bridge running locally on port ${port}, but Dev Tunnel failed: ${message}`
+  } else {
+    log(`Debug mode — no tunnel opened. Bot server available at http://localhost:${port}/api/messages`);
+    vscode.window.showInformationMessage(
+      `Bridge running in debug mode on http://localhost:${port}/api/messages`
     );
   }
 
