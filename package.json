@@ -24,6 +24,11 @@
         "command": "copilotcli-teams-bridge.stop",
         "title": "Stop Bridge",
         "category": "CopilotCLI Teams"
+      },
+      {
+        "command": "copilotcli-teams-bridge.resetTunnel",
+        "title": "Reset Tunnel URL",
+        "category": "CopilotCLI Teams"
       }
     ],
     "configuration": {

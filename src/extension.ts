@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
-import { openTunnel, closeTunnel, initTunnel } from "./tunnel";
+import { openTunnel, closeTunnel, initTunnel, resetTunnel } from "./tunnel";
 import { ConversationState } from "./state";
 import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent } from "./commands";
 import { buildPermissionCard, shortAlias, resolveModeAlias } from "./cards";
@@ -334,11 +334,29 @@ async function startBridge(): Promise<void> {
 
   // Open Dev Tunnel
   try {
-    const tunnelUri = await openTunnel(port);
+    const { uri: tunnelUri, isNew } = await openTunnel(port);
+    const endpoint = `${tunnelUri.toString()}/api/messages`;
     log(`Dev Tunnel URL: ${tunnelUri.toString()}`);
-    vscode.window.showInformationMessage(
-      `Bridge running. Tunnel: ${tunnelUri.toString()}/api/messages`
-    );
+    if (isNew) {
+      log("──────────────────────────────────────────────────────────");
+      log("NEW TUNNEL CREATED — one-time setup required:");
+      log(`  1. Go to Azure Bot → Settings → Configuration`);
+      log(`  2. Set Messaging endpoint to: ${endpoint}`);
+      log(`  3. Save. This URL is persistent and won't change across restarts.`);
+      log("──────────────────────────────────────────────────────────");
+      vscode.window.showWarningMessage(
+        `New tunnel created. Set your Azure Bot messaging endpoint to: ${endpoint}`,
+        "Copy URL"
+      ).then((choice) => {
+        if (choice === "Copy URL") {
+          vscode.env.clipboard.writeText(endpoint);
+        }
+      });
+    } else {
+      vscode.window.showInformationMessage(
+        `Bridge running. Tunnel: ${endpoint}`
+      );
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log(`Tunnel error: ${message}`);
@@ -388,7 +406,13 @@ export function activate(context: vscode.ExtensionContext): void {
     outputChannel,
     statusBarItem,
     vscode.commands.registerCommand("copilotcli-teams-bridge.start", startBridge),
-    vscode.commands.registerCommand("copilotcli-teams-bridge.stop", stopBridge)
+    vscode.commands.registerCommand("copilotcli-teams-bridge.stop", stopBridge),
+    vscode.commands.registerCommand("copilotcli-teams-bridge.resetTunnel", async () => {
+      await resetTunnel();
+      vscode.window.showInformationMessage(
+        "Tunnel reset. A new URL will be generated on next start — remember to update your Azure Bot messaging endpoint."
+      );
+    })
   );
 }
 

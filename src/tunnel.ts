@@ -36,17 +36,21 @@ export function initTunnel(state: vscode.Memento, logger?: (msg: string) => void
   }
 }
 
+export interface TunnelResult {
+  uri: vscode.Uri;
+  isNew: boolean;
+}
+
 /**
  * Create or reuse a persistent Dev Tunnel and start hosting on the given local port.
- * Returns the public URI that Azure Bot Service should POST to.
  */
-export async function openTunnel(localPort: number): Promise<vscode.Uri> {
+export async function openTunnel(localPort: number): Promise<TunnelResult> {
   log("[Tunnel] openTunnel called for port " + localPort);
   const client = await getManagementClient();
   log("[Tunnel] Management client ready");
 
-  const tunnel = await getOrCreateTunnel(client);
-  log(`[Tunnel] Got tunnel: id=${tunnel.tunnelId} cluster=${tunnel.clusterId}`);
+  const { tunnel, isNew } = await getOrCreateTunnel(client);
+  log(`[Tunnel] Got tunnel: id=${tunnel.tunnelId} cluster=${tunnel.clusterId} (${isNew ? "new" : "reused"})`);
 
   // Create or update port with anonymous connect access
   const anonymousAccess: TunnelAccessControlEntry = {
@@ -93,7 +97,7 @@ export async function openTunnel(localPort: number): Promise<vscode.Uri> {
   // Extract public URI
   const uri = extractTunnelUri(tunnel, localPort);
   log(`[Tunnel] Public URI: ${uri}`);
-  return vscode.Uri.parse(uri);
+  return { uri: vscode.Uri.parse(uri), isNew };
 }
 
 /**
@@ -110,6 +114,31 @@ export async function closeTunnel(): Promise<void> {
   }
   activeTunnel = undefined;
   managementClient = undefined;
+}
+
+/**
+ * Delete the saved tunnel and force a new one on next start.
+ */
+export async function resetTunnel(): Promise<void> {
+  await closeTunnel();
+  if (globalState) {
+    const saved = globalState.get<SavedTunnelInfo>(STATE_KEY);
+    if (saved) {
+      // Try to delete the tunnel from the service
+      try {
+        const client = await getManagementClient();
+        await client.deleteTunnel(
+          { tunnelId: saved.tunnelId, clusterId: saved.clusterId }
+        );
+        log("[Tunnel] Deleted tunnel from service");
+      } catch {
+        // Ignore — tunnel may already be gone
+      }
+      managementClient = undefined;
+    }
+    await globalState.update(STATE_KEY, undefined);
+    log("[Tunnel] Cleared saved tunnel state — a new URL will be generated on next start");
+  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────
@@ -137,7 +166,7 @@ async function getManagementClient(): Promise<TunnelManagementHttpClient> {
 
 async function getOrCreateTunnel(
   client: TunnelManagementHttpClient
-): Promise<Tunnel> {
+): Promise<{ tunnel: Tunnel; isNew: boolean }> {
   const saved = globalState?.get<SavedTunnelInfo>(STATE_KEY);
   log(`[Tunnel] Saved state: ${saved ? JSON.stringify(saved) : "none"}`);
 
@@ -151,7 +180,7 @@ async function getOrCreateTunnel(
       );
       if (existing) {
         log(`[Tunnel] Reusing existing tunnel id=${existing.tunnelId}`);
-        return existing;
+        return { tunnel: existing, isNew: false };
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -196,7 +225,7 @@ async function getOrCreateTunnel(
     log(`[Tunnel] Saved tunnel info to globalState`);
   }
 
-  return tunnel;
+  return { tunnel, isNew: true };
 }
 
 function extractTunnelUri(tunnel: Tunnel, port: number): string {
