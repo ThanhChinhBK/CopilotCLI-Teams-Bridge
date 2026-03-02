@@ -1,4 +1,7 @@
 import * as vscode from "vscode";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as fs from "node:fs";
 import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
 import { openTunnel } from "./tunnel";
@@ -63,12 +66,31 @@ async function handleTeamsMessage(
       }
     }
 
-    // Intercept /viewplan — display plan from accumulated ACP events
+    // Intercept /viewplan — read plan from session state on disk, fallback to in-memory
     if (msg.value.action === "command" && msg.value.command === "/viewplan") {
-      if (!conversationState.latestPlan) {
+      let planContent: string | null = null;
+
+      // Try reading plan.md from Copilot CLI session state on disk
+      const sessionId = conversationState.sessionId;
+      if (sessionId) {
+        const planPath = path.join(os.homedir(), ".copilot", "session-state", sessionId, "plan.md");
+        try {
+          planContent = await fs.promises.readFile(planPath, "utf-8");
+        } catch {
+          // File doesn't exist yet — fall through
+        }
+      }
+
+      // Fallback to in-memory plan from ACP events
+      if (!planContent) {
+        planContent = conversationState.latestPlan;
+      }
+
+      if (!planContent || !planContent.trim()) {
         return { text: "No plan available yet." };
       }
-      return { card: buildCodeCard("```markdown\n" + conversationState.latestPlan + "\n```") };
+
+      return { card: buildCodeCard("```markdown\n" + planContent.trim() + "\n```") };
     }
 
     try {
@@ -141,6 +163,10 @@ async function handleTeamsMessage(
     botServer?.stopTyping();
     const text = stripAnsi(raw);
     log(`Response: ${text.slice(0, 200)}…`);
+    // Capture response as plan when in plan/architect mode
+    if (conversationState.currentModeId && /plan|architect/i.test(conversationState.currentModeId)) {
+      conversationState.latestPlan = text;
+    }
     // Send response — use code card if it contains code blocks, otherwise paginate as text
     if (hasCodeBlocks(text)) {
       await sendExtra({ card: buildCodeCard(text) });

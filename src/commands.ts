@@ -560,7 +560,7 @@ export function buildCompletionActions(modeId?: string | null): Record<string, u
         },
         {
           type: "Action.Submit",
-          title: "📄 View Plan",
+          title: "📄 View Full Plan",
           data: { action: "command", command: "/viewplan" },
         },
         {
