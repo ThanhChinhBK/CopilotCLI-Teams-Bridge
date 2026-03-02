@@ -19,6 +19,8 @@ export class ConversationState {
   pendingPermission: PermissionRequest | null = null;
   /** When true, auto-approve all permission requests */
   autoApprove = false;
+  /** Accumulated plan content from ACP plan events */
+  latestPlan: string | null = null;
 
   /** Populate from the session/new (or session/load) response. */
   initFromSession(

@@ -97,6 +97,7 @@ export class AcpClient extends EventEmitter {
   >();
   private sessionId: string | null = null;
   private responseChunks: string[] = [];
+  private lastToolCallEndIndex = 0;
   /** Track tool call titles by toolCallId for enriching permission cards */
   private toolCallTitles = new Map<string, string>();
 
@@ -178,6 +179,7 @@ export class AcpClient extends EventEmitter {
     }
 
     this.responseChunks = [];
+    this.lastToolCallEndIndex = 0;
 
     const res = await this.sendRpc("session/prompt", {
       sessionId: this.sessionId,
@@ -225,6 +227,11 @@ export class AcpClient extends EventEmitter {
     this.sendNotification("session/cancel", {
       sessionId: this.sessionId,
     });
+  }
+
+  /** Return only the text accumulated after the last tool call completed. */
+  getPostToolCallText(): string {
+    return this.responseChunks.slice(this.lastToolCallEndIndex).join("");
   }
 
   /** Load a previous session by ID. */
@@ -419,6 +426,9 @@ export class AcpClient extends EventEmitter {
         };
         if (info.title || info.name) {
           this.emit("toolCall", info as unknown as ToolCallInfo);
+        }
+        if (raw.status === "completed") {
+          this.lastToolCallEndIndex = this.responseChunks.length;
         }
         break;
       }

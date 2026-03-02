@@ -1,12 +1,9 @@
 import * as vscode from "vscode";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
 import { openTunnel } from "./tunnel";
 import { ConversationState } from "./state";
-import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, buildSummaryCard, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent } from "./commands";
+import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent } from "./commands";
 import { buildPermissionCard, shortAlias, resolveModeAlias } from "./cards";
 import type { BridgeMessage, MessageReply, ToolCallInfo, PlanInfo, PermissionRequest, ModelInfo } from "./types";
 
@@ -41,7 +38,7 @@ async function handleTeamsMessage(
   if (msg.value) {
     log(`Card action: ${JSON.stringify(msg.value)} (conversation: ${msg.conversationId})`);
 
-    // Intercept /implement and /autopilot from card buttons
+    // Intercept /implement and /autopilot from card buttons — pure mode switches
     const cmdName = msg.value.action === "command" ? msg.value.command : null;
     if (cmdName === "/implement" || cmdName === "/autopilot") {
       try {
@@ -52,54 +49,26 @@ async function handleTeamsMessage(
           await acpClient.setMode(targetMode);
           conversationState.setMode(targetMode);
         }
+        const alias = targetMode ? shortAlias(targetMode) : "code";
         if (cmdName === "/autopilot") {
           conversationState.autoApprove = true;
-          await sendExtra({ text: "⚡ _Autopilot enabled — auto-approving all edits_" });
+          return { text: `⚡ Mode switched to **${alias}** with auto-approve **ON**. Send a message to start.` };
         } else {
           conversationState.autoApprove = false;
+          return { text: `🔄 Mode switched to **${alias}**. Send a message to start.` };
         }
-
-        const promptText = "Start implementing the plan now. Make all the changes. " +
-          "When you are done, provide ONLY a concise summary of what was changed. " +
-          "List each file modified with a short description of the change. " +
-          "Do NOT repeat the step-by-step narration of what you did.";
-        const label = cmdName === "/autopilot"
-          ? "⚡ _Starting autopilot implementation…_"
-          : "🚀 _Starting implementation…_";
-
-        await sendExtra({ text: label });
-        botServer?.startTyping();
-        const raw = await acpClient.prompt(promptText);
-        botServer?.stopTyping();
-        const text = stripAnsi(raw);
-        log(`${cmdName} response: ${text.slice(0, 200)}…`);
-        await sendExtra({ card: buildSummaryCard(text) });
-        return { card: buildCompletionActions(conversationState.currentModeId) };
       } catch (err: unknown) {
-        botServer?.stopTyping();
         const message = err instanceof Error ? err.message : String(err);
         return { text: `⚠️ Error: ${message}` };
       }
     }
 
-    // Intercept /viewplan — read plan.md from session state and display as CodeBlock
+    // Intercept /viewplan — display plan from accumulated ACP events
     if (msg.value.action === "command" && msg.value.command === "/viewplan") {
-      if (!conversationState.sessionId) {
-        return { text: "⚠️ No active session." };
+      if (!conversationState.latestPlan) {
+        return { text: "No plan available yet." };
       }
-      try {
-        const planPath = join(
-          homedir(),
-          ".copilot",
-          "session-state",
-          conversationState.sessionId,
-          "plan.md"
-        );
-        const content = await readFile(planPath, "utf-8");
-        return { card: buildCodeCard("```markdown\n" + content + "\n```") };
-      } catch {
-        return { text: "⚠️ No plan found for this session." };
-      }
+      return { card: buildCodeCard("```markdown\n" + conversationState.latestPlan + "\n```") };
     }
 
     try {
@@ -278,6 +247,19 @@ async function startBridge(): Promise<void> {
   acpClient.on("plan", (info: PlanInfo) => {
     const msg = formatPlan(info);
     log(`[ACP] ${msg}`);
+    // Accumulate plan content into state for /viewplan
+    if (conversationState) {
+      if (info.content) {
+        conversationState.latestPlan = info.content;
+      } else if (info.steps && info.steps.length > 0) {
+        conversationState.latestPlan = info.steps
+          .map((s) => {
+            const icon = s.status === "done" ? "✅" : s.status === "running" ? "⏳" : "○";
+            return `${icon} ${s.description}`;
+          })
+          .join("\n");
+      }
+    }
     if (botServer) {
       void botServer.sendProactive({ text: msg });
     }

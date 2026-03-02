@@ -500,9 +500,11 @@ export function buildDiffCard(info: ToolCallInfo): Record<string, unknown> | nul
         },
       ],
     },
-    // Diff lines — compact container with no inter-line spacing
+    // Diff lines — compact container with no inter-line spacing (collapsed by default)
     {
       type: "Container",
+      id: "diff-lines",
+      isVisible: false,
       style: "emphasis",
       items: diffItems,
     },
@@ -511,10 +513,18 @@ export function buildDiffCard(info: ToolCallInfo): Record<string, unknown> | nul
   if (truncated) {
     body.push({
       type: "TextBlock",
+      id: "diff-truncation",
+      isVisible: false,
       text: `_... (${rawLines.length - MAX_DIFF_LINES} more lines not shown)_`,
       isSubtle: true,
       spacing: "Small",
     });
+  }
+
+  const totalLines = rawLines.length;
+  const toggleTargets: { elementId: string }[] = [{ elementId: "diff-lines" }];
+  if (truncated) {
+    toggleTargets.push({ elementId: "diff-truncation" });
   }
 
   return {
@@ -522,6 +532,13 @@ export function buildDiffCard(info: ToolCallInfo): Record<string, unknown> | nul
     type: "AdaptiveCard",
     version: "1.5",
     body,
+    actions: [
+      {
+        type: "Action.ToggleVisibility",
+        title: `Show diff (${totalLines} lines)`,
+        targetElements: toggleTargets,
+      },
+    ],
   };
 }
 
@@ -533,12 +550,12 @@ export function buildCompletionActions(modeId?: string | null): Record<string, u
     ? [
         {
           type: "Action.Submit",
-          title: "🚀 Start Implementing",
+          title: "🔄 Switch to Code Mode",
           data: { action: "command", command: "/implement" },
         },
         {
           type: "Action.Submit",
-          title: "⚡ Autopilot",
+          title: "⚡ Code Mode + Auto-approve",
           data: { action: "command", command: "/autopilot" },
         },
         {
@@ -724,13 +741,29 @@ export function buildSummaryCard(text: string): Record<string, unknown> {
       const language = LANG_MAP[langTag] ?? "PlainText";
       body.push({ type: "CodeBlock", codeSnippet: code, language });
     } else if (part.trim()) {
-      body.push({ type: "TextBlock", text: part.trim(), wrap: true });
+      const lines = part.split("\n").filter((l: string) => l.trim());
+      for (const line of lines) {
+        body.push({
+          type: "TextBlock",
+          text: line.trim(),
+          wrap: true,
+          spacing: "Small",
+        });
+      }
     }
   }
 
   if (body.length <= 2) {
-    // Only header + separator, no content parsed — show raw text
-    body.push({ type: "TextBlock", text: text, wrap: true });
+    // Only header + separator, no content parsed — show raw text as individual lines
+    const lines = text.split("\n").filter((l: string) => l.trim());
+    for (const line of lines) {
+      body.push({
+        type: "TextBlock",
+        text: line.trim(),
+        wrap: true,
+        spacing: "Small",
+      });
+    }
   }
 
   return {
