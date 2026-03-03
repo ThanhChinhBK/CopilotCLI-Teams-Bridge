@@ -114,6 +114,7 @@ export class AcpClient extends EventEmitter {
     this.process = spawn("copilot", ["--acp", "--stdio"], {
       cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],
+      shell: true,
     });
 
     this.process.stdout.on("data", (chunk: Buffer) =>
@@ -122,6 +123,15 @@ export class AcpClient extends EventEmitter {
 
     this.process.stderr.on("data", (chunk: Buffer) => {
       this.emit("log", chunk.toString());
+    });
+
+    this.process.on("error", (err) => {
+      this.emit("log", `Spawn error: ${err.message}`);
+      this.process = null;
+      for (const [, p] of this.pending) {
+        p.reject(new Error(`Failed to start copilot: ${err.message}`));
+      }
+      this.pending.clear();
     });
 
     this.process.on("exit", (code) => {

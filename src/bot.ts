@@ -68,6 +68,7 @@ export class BotServer {
   constructor(
     appId: string,
     appPassword: string,
+    appTenantId: string,
     private readonly onMessage: MessageHandler,
     private readonly onLog?: (msg: string) => void
   ) {
@@ -77,7 +78,8 @@ export class BotServer {
         ? {
             MicrosoftAppId: appId,
             MicrosoftAppPassword: appPassword,
-            MicrosoftAppType: "SingleTenant",
+            MicrosoftAppType: appTenantId ? "SingleTenant" : "MultiTenant",
+            ...(appTenantId ? { MicrosoftAppTenantId: appTenantId } : {}),
           }
         : {};
     const botAuth = new ConfigurationBotFrameworkAuthentication(authConfig);
@@ -166,11 +168,13 @@ export class BotServer {
   start(port: number): Promise<void> {
     return new Promise((resolve) => {
       this.server = createServer((req, res) => {
+        this.log(`HTTP ${req.method} ${req.url} from ${req.socket.remoteAddress}`);
         if (req.method === "POST" && req.url === "/api/messages") {
           const chunks: Buffer[] = [];
           req.on("data", (chunk: Buffer) => chunks.push(chunk));
           req.on("end", () => {
             const body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
+            this.log(`Activity type: ${body.type}, text: ${((body.text as string) ?? "").slice(0, 80)}`);
             const wrappedReq = wrapRequest(req, body);
             const wrappedRes = wrapResponse(res);
 

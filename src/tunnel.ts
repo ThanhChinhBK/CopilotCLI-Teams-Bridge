@@ -61,7 +61,7 @@ export async function openTunnel(localPort: number): Promise<TunnelResult> {
 
   const port: TunnelPort = {
     portNumber: localPort,
-    protocol: "https",
+    protocol: "http",
     accessControl: { entries: [anonymousAccess] },
   };
 

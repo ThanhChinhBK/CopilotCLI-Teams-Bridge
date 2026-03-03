@@ -25,6 +25,7 @@ function getConfig() {
   return {
     appId: cfg.get<string>("microsoftAppId", ""),
     appPassword: cfg.get<string>("microsoftAppPassword", ""),
+    appTenantId: cfg.get<string>("microsoftAppTenantId", ""),
     port: cfg.get<number>("localPort", 3978),
   };
 }
@@ -192,7 +193,7 @@ async function startBridge(): Promise<void> {
     return;
   }
 
-  const { appId, appPassword, port } = getConfig();
+  const { appId, appPassword, appTenantId, port } = getConfig();
 
   if (!appId || !appPassword) {
     log("No App ID/Password configured — running in local debug mode (no auth).");
@@ -328,7 +329,7 @@ async function startBridge(): Promise<void> {
   });
 
   // Start Bot Framework HTTP server
-  botServer = new BotServer(appId, appPassword, handleTeamsMessage, log);
+  botServer = new BotServer(appId, appPassword, appTenantId, handleTeamsMessage, log);
   await botServer.start(port);
   log(`Bot server listening on port ${port}.`);
 
@@ -337,7 +338,8 @@ async function startBridge(): Promise<void> {
   if (appId && appPassword) {
     try {
       const { uri: tunnelUri, isNew } = await openTunnel(port);
-      const endpoint = `${tunnelUri.toString()}/api/messages`;
+      const base = tunnelUri.toString().replace(/\/+$/, "");
+      const endpoint = `${base}/api/messages`;
       log(`Dev Tunnel URL: ${tunnelUri.toString()}`);
       if (isNew) {
         log("──────────────────────────────────────────────────────────");

@@ -3,3 +3,7 @@ node_modules/
 .vscode-test/
 *.vsix
 .vscode/settings.json
+
+# Teams app package (should live outside this repo)
+teams-manifest/
+*.zip

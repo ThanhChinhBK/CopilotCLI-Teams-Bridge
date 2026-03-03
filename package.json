@@ -44,6 +44,11 @@
           "default": "",
           "description": "Microsoft App Password (client secret) for the Azure Bot registration."
         },
+        "copilotcli-teams-bridge.microsoftAppTenantId": {
+          "type": "string",
+          "default": "",
+          "description": "Microsoft Entra tenant ID (required for Single-tenant Azure Bot)."
+        },
         "copilotcli-teams-bridge.localPort": {
           "type": "number",
           "default": 3978,
