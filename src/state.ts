@@ -22,6 +22,12 @@ export class ConversationState {
   /** Accumulated plan content from ACP plan events */
   latestPlan: string | null = null;
 
+  // ─── Bridge-side metrics ───
+  readonly startedAt = Date.now();
+  promptCount = 0;
+  toolCallCount = 0;
+  permissionCount = 0;
+
   /** Populate from the session/new (or session/load) response. */
   initFromSession(
     sessionId: string,
@@ -60,6 +66,13 @@ export class ConversationState {
       const hash = id.lastIndexOf("#");
       return hash >= 0 ? id.substring(hash + 1) : id;
     };
+
+    const elapsed = Date.now() - this.startedAt;
+    const sec = Math.floor(elapsed / 1000) % 60;
+    const min = Math.floor(elapsed / 60000) % 60;
+    const hr = Math.floor(elapsed / 3600000);
+    const uptime = hr > 0 ? `${hr}h ${min}m` : `${min}m ${sec}s`;
+
     const parts: string[] = [];
     parts.push(`**Session:** ${this.sessionId ?? "_(none)_"}`);
     parts.push(
@@ -69,6 +82,10 @@ export class ConversationState {
       `**Model:** ${this.currentModelId ? short(this.currentModelId) : "default"} (${this.availableModels.map((m) => short(m.modelId)).join(", ") || "none advertised"})`
     );
     parts.push(`**Auto-approve:** ${this.autoApprove ? "✅ ON" : "❌ OFF"}`);
+    parts.push(`**Uptime:** ${uptime}`);
+    parts.push(`**Prompts:** ${this.promptCount}`);
+    parts.push(`**Tool calls:** ${this.toolCallCount}`);
+    parts.push(`**Permissions:** ${this.permissionCount}`);
     return parts.join("\n");
   }
 }

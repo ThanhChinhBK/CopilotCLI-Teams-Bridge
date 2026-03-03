@@ -1,4 +1,4 @@
-import type { SessionMode, ModelInfo, PermissionRequest } from "./types";
+import type { SessionMode, ModelInfo, PermissionRequest, SessionInfo } from "./types";
 
 /** Extract short alias from a mode/model ID (URL fragment or full string). */
 export function shortAlias(id: string): string {
@@ -217,5 +217,43 @@ export function buildHelpCard(): Record<string, unknown> {
       title: `${c.cmd} — ${c.desc}`,
       data: { action: "command", command: c.cmd },
     })),
+  };
+}
+
+/** Build a session-list Adaptive Card with one button per row. */
+export function buildSessionCard(
+  sessions: SessionInfo[],
+  currentSessionId: string | null
+): Record<string, unknown> {
+  return {
+    ...baseCard(),
+    body: [
+      {
+        type: "TextBlock",
+        text: "📋 Sessions",
+        size: "Medium",
+        weight: "Bolder",
+      },
+      ...(currentSessionId
+        ? [{ type: "TextBlock", text: `Current: \`${currentSessionId}\``, isSubtle: true, wrap: true }]
+        : []),
+      ...sessions.map((s) => {
+        const isCurrent = s.sessionId === currentSessionId;
+        const label = s.title
+          ? `${isCurrent ? "▸ " : ""}${s.title}`
+          : `${isCurrent ? "▸ " : ""}${s.sessionId}`;
+        const subtitle = s.createdAt ? ` (${s.createdAt})` : "";
+        return {
+          type: "ActionSet",
+          actions: [
+            {
+              type: "Action.Submit",
+              title: `${label}${subtitle}`,
+              data: { action: "load_session", sessionId: s.sessionId },
+            },
+          ],
+        };
+      }),
+    ],
   };
 }

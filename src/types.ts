@@ -162,10 +162,11 @@ export interface MessageReply {
 
 /** Data sent by Adaptive Card Action.Submit buttons. */
 export interface CardActionData {
-  action: "set_mode" | "set_model" | "permission" | "command";
+  action: "set_mode" | "set_model" | "permission" | "command" | "load_session";
   modeId?: string;
   modelId?: string;
   /** Selected permission optionId from ACP options */
   optionId?: string;
   command?: string;
+  sessionId?: string;
 }

@@ -158,6 +158,7 @@ async function handleTeamsMessage(
   }
 
   // Regular prompt passthrough
+  conversationState.promptCount++;
   try {
     botServer?.startTyping();
     const raw = await acpClient.prompt(msg.text);
@@ -195,8 +196,8 @@ async function startBridge(): Promise<void> {
 
   const { appId, appPassword, appTenantId, port } = getConfig();
 
-  if (!appId || !appPassword) {
-    log("No App ID/Password configured — running in local debug mode (no auth).");
+  if (!appId || !appPassword || !appTenantId) {
+    log("Running in debug mode — no Azure Bot credentials configured. Using Copilot Agent SDK for local testing only.");
   }
 
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -233,6 +234,9 @@ async function startBridge(): Promise<void> {
 
   // Subscribe to rich ACP events — send to Teams proactively
   acpClient.on("toolCall", (info: ToolCallInfo) => {
+    if (info.status === "completed" && conversationState) {
+      conversationState.toolCallCount++;
+    }
     const msg = formatToolCall(info);
     log(`[ACP] Tool: ${msg}`);
     // Skip tool calls that are permission requests — the permission card covers them
@@ -304,6 +308,9 @@ async function startBridge(): Promise<void> {
     log(`[ACP] Available models updated: ${models.map((m) => m.modelId).join(", ")}`);
   });
   acpClient.on("permissionRequest", (req: PermissionRequest) => {
+    if (conversationState) {
+      conversationState.permissionCount++;
+    }
     log(`[ACP] Permission requested: toolCall=${req.toolCallId} title="${req.title}" options=[${req.options.map((o) => o.optionId).join(", ")}]`);
 
     // Auto-approve: automatically select the first "allow" option
@@ -333,9 +340,9 @@ async function startBridge(): Promise<void> {
   await botServer.start(port);
   log(`Bot server listening on port ${port}.`);
 
-  // Open Dev Tunnel only when App ID/Password are configured (Teams mode).
+  // Open Dev Tunnel only when all Azure Bot credentials are configured (Teams mode).
   // In debug mode, skip the tunnel — localhost is sufficient for local testing.
-  if (appId && appPassword) {
+  if (appId && appPassword && appTenantId) {
     try {
       const { uri: tunnelUri, isNew } = await openTunnel(port);
       const base = tunnelUri.toString().replace(/\/+$/, "");
@@ -369,9 +376,9 @@ async function startBridge(): Promise<void> {
       );
     }
   } else {
-    log(`Debug mode — no tunnel opened. Bot server available at http://localhost:${port}/api/messages`);
+    log(`Running in debug mode — no Azure Bot credentials configured. Bot server available at http://localhost:${port}/api/messages`);
     vscode.window.showInformationMessage(
-      `Bridge running in debug mode on http://localhost:${port}/api/messages`
+      `Bridge running in debug mode (no Azure Bot credentials). Local endpoint: http://localhost:${port}/api/messages`
     );
   }
 

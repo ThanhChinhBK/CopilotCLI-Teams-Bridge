@@ -5,6 +5,11 @@
   "version": "0.0.1",
   "publisher": "nguyenchinh",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nguyenchinh/CopilotCLI-Teams-Bridge"
+  },
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -42,7 +47,8 @@
         "copilotcli-teams-bridge.microsoftAppPassword": {
           "type": "string",
           "default": "",
-          "description": "Microsoft App Password (client secret) for the Azure Bot registration."
+          "description": "Microsoft App Password (client secret) for the Azure Bot registration.",
+          "editPresentation": "singlelineText"
         },
         "copilotcli-teams-bridge.microsoftAppTenantId": {
           "type": "string",

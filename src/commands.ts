@@ -16,6 +16,7 @@ import {
   buildModeCard,
   buildModelCard,
   buildHelpCard,
+  buildSessionCard,
 } from "./cards";
 
 // ─── Command Parsing ───
@@ -49,7 +50,7 @@ export async function handleCommand(
     case "approve":
       return { text: handleApprove(state) };
     case "sessions":
-      return { text: await handleSessions(cmd.args, state, acp) };
+      return handleSessions(cmd.args, state, acp);
     case "status":
       return { text: handleStatus(state) };
     case "help":
@@ -111,6 +112,19 @@ export async function handleCardAction(
       return {
         text: `✅ Permission response: **${label}**`,
       };
+    }
+    case "load_session": {
+      if (!action.sessionId) {
+        return { text: "⚠️ No session specified." };
+      }
+      try {
+        const result = await acp.loadSession(action.sessionId);
+        state.initFromSession(result.sessionId, result.modes, result.models);
+        return { text: `✅ Session \`${action.sessionId}\` loaded.` };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { text: `⚠️ Failed to load session: ${message}` };
+      }
     }
     case "command": {
       if (action.command) {
@@ -199,44 +213,38 @@ async function handleSessions(
   args: string[],
   state: ConversationState,
   acp: AcpClient
-): Promise<string> {
+): Promise<MessageReply> {
   const action = args[0] ?? "list";
 
   if (action === "list") {
     try {
       const sessions = await acp.listSessions();
       if (sessions.length === 0) {
-        return "📋 No previous sessions found (or agent does not support listing).";
+        return { text: "📋 No previous sessions found (or agent does not support listing)." };
       }
-      const list = sessions
-        .map(
-          (s) =>
-            `• \`${s.sessionId}\`${s.title ? ` — ${s.title}` : ""}${s.createdAt ? ` (${s.createdAt})` : ""}`
-        )
-        .join("\n");
-      return `📋 **Sessions:**\n${list}\n\nUsage: \`/sessions load sessionId\``;
+      return { card: buildSessionCard(sessions, state.sessionId) };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      return `⚠️ Failed to list sessions: ${message}`;
+      return { text: `⚠️ Failed to list sessions: ${message}` };
     }
   }
 
   if (action === "load") {
     const sessionId = args[1];
     if (!sessionId) {
-      return "⚠️ Usage: `/sessions load sessionId`";
+      return { text: "⚠️ Usage: `/sessions load sessionId`" };
     }
     try {
       const result = await acp.loadSession(sessionId);
       state.initFromSession(result.sessionId, result.modes, result.models);
-      return `✅ Session \`${sessionId}\` loaded.`;
+      return { text: `✅ Session \`${sessionId}\` loaded.` };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      return `⚠️ Failed to load session: ${message}`;
+      return { text: `⚠️ Failed to load session: ${message}` };
     }
   }
 
-  return `⚠️ Unknown sessions action: \`${action}\`\n\nUsage: \`/sessions list\` or \`/sessions load id\``;
+  return { text: `⚠️ Unknown sessions action: \`${action}\`\n\nUsage: \`/sessions list\` or \`/sessions load id\`` };
 }
 
 function handleApprove(state: ConversationState): string {
