@@ -244,6 +244,27 @@ export class AcpClient extends EventEmitter {
     return this.responseChunks.slice(this.lastToolCallEndIndex).join("");
   }
 
+  /** Create a fresh session (reuses the existing ACP process). */
+  async newSession(): Promise<SessionResult> {
+    this.requireSession();
+    const res = await this.sendRpc("session/new", {
+      cwd: this.cwd,
+      mcpServers: [],
+    });
+    if (res.error) {
+      throw new Error(res.error.message);
+    }
+    this.sessionId = res.result?.sessionId as string;
+    if (!this.sessionId) {
+      throw new Error("No sessionId returned from session/new");
+    }
+    return {
+      sessionId: this.sessionId,
+      modes: normalizeModes(res.result?.modes),
+      models: normalizeModels(res.result?.models),
+    };
+  }
+
   /** Load a previous session by ID. */
   async loadSession(sessionId: string): Promise<SessionResult> {
     if (!this.process) {

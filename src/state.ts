@@ -23,7 +23,7 @@ export class ConversationState {
   latestPlan: string | null = null;
 
   // ─── Bridge-side metrics ───
-  readonly startedAt = Date.now();
+  startedAt = Date.now();
   promptCount = 0;
   toolCallCount = 0;
   permissionCount = 0;
@@ -43,6 +43,15 @@ export class ConversationState {
       this.currentModelId = models.currentModelId;
       this.availableModels = models.availableModels;
     }
+  }
+
+  /** Reset metrics for a new session. */
+  resetMetrics(): void {
+    this.startedAt = Date.now();
+    this.promptCount = 0;
+    this.toolCallCount = 0;
+    this.permissionCount = 0;
+    this.latestPlan = null;
   }
 
   /** Update mode after a successful set_mode or a CurrentModeUpdate notification. */

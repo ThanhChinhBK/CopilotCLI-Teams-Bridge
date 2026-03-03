@@ -45,6 +45,8 @@ export async function handleCommand(
       return handleMode(cmd.args, state, acp);
     case "model":
       return handleModel(cmd.args, state, acp);
+    case "new":
+      return handleNewSession(state, acp);
     case "cancel":
       return { text: handleCancel(acp) };
     case "approve":
@@ -201,6 +203,21 @@ async function handleModel(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { text: `⚠️ Failed to switch model: ${message}` };
+  }
+}
+
+async function handleNewSession(
+  state: ConversationState,
+  acp: AcpClient
+): Promise<MessageReply> {
+  try {
+    const result = await acp.newSession();
+    state.initFromSession(result.sessionId, result.modes, result.models);
+    state.resetMetrics();
+    return { text: `✅ New session started: \`${result.sessionId}\`` };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { text: `⚠️ Failed to create session: ${message}` };
   }
 }
 

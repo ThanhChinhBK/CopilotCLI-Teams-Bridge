@@ -191,6 +191,7 @@ export function buildHelpCard(): Record<string, unknown> {
     { cmd: "/mode", desc: "Switch agent mode" },
     { cmd: "/model", desc: "Switch AI model" },
     { cmd: "/approve", desc: "Toggle auto-approve" },
+    { cmd: "/new", desc: "Start new session" },
     { cmd: "/cancel", desc: "Cancel running prompt" },
     { cmd: "/sessions", desc: "List/load sessions" },
     { cmd: "/status", desc: "Show session state" },
@@ -225,6 +226,18 @@ export function buildSessionCard(
   sessions: SessionInfo[],
   currentSessionId: string | null
 ): Record<string, unknown> {
+  const sessionLabel = (s: SessionInfo) => {
+    const isCurrent = s.sessionId === currentSessionId;
+    const label = s.title
+      ? `${isCurrent ? "▸ " : ""}${s.title}`
+      : `${isCurrent ? "▸ " : ""}${s.sessionId}`;
+    const subtitle = s.createdAt ? ` (${s.createdAt})` : "";
+    return `${label}${subtitle}`;
+  };
+
+  const recent = sessions.slice(0, 8);
+  const older = sessions.slice(8);
+
   return {
     ...baseCard(),
     body: [
@@ -237,23 +250,35 @@ export function buildSessionCard(
       ...(currentSessionId
         ? [{ type: "TextBlock", text: `Current: \`${currentSessionId}\``, isSubtle: true, wrap: true }]
         : []),
-      ...sessions.map((s) => {
-        const isCurrent = s.sessionId === currentSessionId;
-        const label = s.title
-          ? `${isCurrent ? "▸ " : ""}${s.title}`
-          : `${isCurrent ? "▸ " : ""}${s.sessionId}`;
-        const subtitle = s.createdAt ? ` (${s.createdAt})` : "";
-        return {
-          type: "ActionSet",
-          actions: [
-            {
-              type: "Action.Submit",
-              title: `${label}${subtitle}`,
-              data: { action: "load_session", sessionId: s.sessionId },
-            },
-          ],
-        };
-      }),
+      {
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.Submit",
+            title: "➕ New Session",
+            data: { action: "command", command: "/new" },
+          },
+        ],
+      },
+      ...recent.map((s) => ({
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.Submit",
+            title: sessionLabel(s),
+            data: { action: "load_session", sessionId: s.sessionId },
+          },
+        ],
+      })),
     ],
+    ...(older.length > 0
+      ? {
+          actions: older.map((s) => ({
+            type: "Action.Submit",
+            title: sessionLabel(s),
+            data: { action: "load_session", sessionId: s.sessionId },
+          })),
+        }
+      : {}),
   };
 }
