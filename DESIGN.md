@@ -90,14 +90,14 @@ A VS Code extension that bridges Microsoft Teams (as a mobile-friendly chat UI) 
 - **Scope:** `personal` only (no team or groupChat — prevents workspace leakage)
 - **Manifest version:** 1.24
 - **Bot ID:** `249edc0b-52c7-4446-982e-6d8fc395cb0e`
-- Sideloaded into org Teams tenant (`inter-k.com`) with custom app upload enabled
+- Sideloaded into org Teams tenant with custom app upload enabled
 
 ## 5. Cross-Tenant Setup
 
 | Component | Account / Tenant |
 |-----------|-----------------|
 | Azure Bot + Entra App Registration | Personal Azure subscription (personal tenant) |
-| Teams app sideloading + usage | Org M365 tenant (`inter-k.com`, custom app upload enabled) |
+| Teams app sideloading + usage | Org M365 tenant |
 | Copilot CLI execution | Local machine (developer's workstation) |
 
 This works because the Entra app is set to **multi-tenant**, allowing the org Teams tenant to authenticate with the bot registered in the personal Azure tenant.
