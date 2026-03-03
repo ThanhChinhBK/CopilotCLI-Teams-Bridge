@@ -2,7 +2,7 @@
 
 A VS Code extension that bridges Microsoft Teams to your local GitHub Copilot CLI. Chat with your workspace from your phone.
 
-![Demo](docs/images/demo.gif){width=80px}
+![Demo](docs/images/demo.gif)
 
 ## How It Works
 
