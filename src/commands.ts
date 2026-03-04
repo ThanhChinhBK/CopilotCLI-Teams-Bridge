@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as nodePath from "node:path";
+import { execSync } from "node:child_process";
 import type { AcpClient } from "./acp";
 import type { ConversationState } from "./state";
 import type {
@@ -55,6 +58,12 @@ export async function handleCommand(
       return handleSessions(cmd.args, state, acp);
     case "status":
       return { text: handleStatus(state) };
+    case "files":
+      return handleFiles(cmd.args, state);
+    case "undo":
+      return handleUndo(cmd.args, state);
+    case "thinking":
+      return { text: handleThinking(state) };
     case "help":
       return { card: buildHelpCard() };
     default:
@@ -273,6 +282,257 @@ function handleApprove(state: ConversationState): string {
 
 function handleStatus(state: ConversationState): string {
   return `📊 **Bridge Status**\n\n${state.formatStatus()}`;
+}
+
+// ─── File Browsing ───
+
+const MAX_ENTRIES = 80;
+const MAX_DEPTH = 3;
+const IGNORED = new Set([
+  "node_modules", ".git", ".next", ".nuxt", "__pycache__", ".venv",
+  "dist", "build", "out", ".output", "coverage", ".turbo", ".cache",
+  ".DS_Store", "Thumbs.db",
+]);
+
+interface DirEntry {
+  name: string;
+  isDir: boolean;
+  children?: DirEntry[];
+  childCount?: number;
+}
+
+/** Recursively scan a directory, respecting depth and entry limits. */
+function scanDir(dirPath: string, depth: number, budget: { remaining: number }): DirEntry[] {
+  if (depth > MAX_DEPTH || budget.remaining <= 0) {
+    return [];
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  // Filter ignored and hidden entries, sort dirs-first
+  const filtered = entries
+    .filter((e) => !IGNORED.has(e.name) && !e.name.startsWith("."))
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) {
+        return a.isDirectory() ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+  const result: DirEntry[] = [];
+  for (const entry of filtered) {
+    if (budget.remaining <= 0) {
+      break;
+    }
+    budget.remaining--;
+
+    if (entry.isDirectory()) {
+      const children = scanDir(nodePath.join(dirPath, entry.name), depth + 1, budget);
+      // Count actual children (including those beyond depth limit)
+      let childCount: number | undefined;
+      try {
+        childCount = fs.readdirSync(nodePath.join(dirPath, entry.name)).filter(
+          (n) => !IGNORED.has(n) && !n.startsWith(".")
+        ).length;
+      } catch {
+        childCount = undefined;
+      }
+      result.push({ name: entry.name, isDir: true, children, childCount });
+    } else {
+      result.push({ name: entry.name, isDir: false });
+    }
+  }
+  return result;
+}
+
+/** Render a DirEntry tree as compact text lines. */
+function renderTree(entries: DirEntry[], prefix: string = ""): string[] {
+  const lines: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const isLast = i === entries.length - 1;
+    const connector = isLast ? "└── " : "├── ";
+    const childPrefix = prefix + (isLast ? "    " : "│   ");
+
+    if (entry.isDir) {
+      const countLabel = entry.childCount != null ? ` (${entry.childCount})` : "";
+      lines.push(`${prefix}${connector}📁 ${entry.name}${countLabel}`);
+      if (entry.children && entry.children.length > 0) {
+        lines.push(...renderTree(entry.children, childPrefix));
+      }
+    } else {
+      lines.push(`${prefix}${connector}${entry.name}`);
+    }
+  }
+  return lines;
+}
+
+function handleFiles(args: string[], state: ConversationState): MessageReply {
+  const workspacePath = state.workspacePath;
+  if (!workspacePath) {
+    return { text: "⚠️ No workspace path available." };
+  }
+
+  const subPath = args.join(" ").trim();
+  const targetPath = subPath
+    ? nodePath.resolve(workspacePath, subPath)
+    : workspacePath;
+
+  // Safety: don't escape the workspace
+  if (!targetPath.startsWith(workspacePath)) {
+    return { text: "⚠️ Path is outside the workspace." };
+  }
+
+  try {
+    const stat = fs.statSync(targetPath);
+    if (!stat.isDirectory()) {
+      return { text: `⚠️ \`${subPath}\` is a file, not a directory.` };
+    }
+  } catch {
+    return { text: `⚠️ Path not found: \`${subPath || "."}\`` };
+  }
+
+  const budget = { remaining: MAX_ENTRIES };
+  const entries = scanDir(targetPath, 0, budget);
+  const treeLines = renderTree(entries);
+
+  const header = subPath ? `📂 \`${subPath}\`` : "📂 Workspace root";
+  const truncation = budget.remaining <= 0 ? "\n\n_(truncated — use `/files subdir` to explore deeper)_" : "";
+
+  return {
+    card: {
+      $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+      type: "AdaptiveCard",
+      version: "1.4",
+      body: [
+        { type: "TextBlock", text: header, weight: "Bolder", size: "Medium" },
+        {
+          type: "CodeBlock",
+          codeSnippet: treeLines.join("\n") || "(empty)",
+          language: "PlainText",
+        },
+        ...(truncation
+          ? [{ type: "TextBlock", text: truncation, isSubtle: true, wrap: true }]
+          : []),
+      ],
+    },
+  };
+}
+
+// ─── Undo ───
+
+function handleUndo(args: string[], state: ConversationState): MessageReply {
+  const workspacePath = state.workspacePath;
+  if (!workspacePath) {
+    return { text: "⚠️ No workspace path available." };
+  }
+
+  if (state.editedFiles.size === 0) {
+    return { text: "⚠️ No tracked edits to undo in this session." };
+  }
+
+  const targetFile = args.join(" ").trim();
+
+  if (targetFile) {
+    // Undo a specific file
+    const fullPath = nodePath.resolve(workspacePath, targetFile);
+    const relPath = nodePath.relative(workspacePath, fullPath);
+    if (!state.editedFiles.has(relPath) && !state.editedFiles.has(fullPath) && !state.editedFiles.has(targetFile)) {
+      return {
+        text: `⚠️ \`${targetFile}\` was not edited in this session.\n\nTracked files: ${[...state.editedFiles.keys()].map((f) => `\`${f}\``).join(", ")}`,
+      };
+    }
+
+    try {
+      execSync(`git checkout -- ${JSON.stringify(relPath)}`, { cwd: workspacePath, stdio: "pipe" });
+      state.editedFiles.delete(relPath);
+      state.editedFiles.delete(fullPath);
+      state.editedFiles.delete(targetFile);
+      return { text: `↩️ Reverted \`${relPath}\`` };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { text: `⚠️ Failed to revert \`${targetFile}\`: ${message}` };
+    }
+  }
+
+  // Undo all tracked files
+  const files = [...state.editedFiles.keys()];
+  const results: string[] = [];
+
+  for (const filePath of files) {
+    try {
+      execSync(`git checkout -- ${JSON.stringify(filePath)}`, { cwd: workspacePath, stdio: "pipe" });
+      state.editedFiles.delete(filePath);
+      results.push(`✅ \`${filePath}\``);
+    } catch {
+      results.push(`❌ \`${filePath}\` (failed)`);
+    }
+  }
+
+  return {
+    text: `↩️ **Undo all** (${files.length} files):\n\n${results.join("\n")}`,
+  };
+}
+
+// ─── Thinking ───
+
+function handleThinking(state: ConversationState): string {
+  state.showThinking = !state.showThinking;
+  return state.showThinking
+    ? "💭 **Thinking display ON** — Agent reasoning will be shown."
+    : "💭 **Thinking display OFF** — Agent reasoning will be hidden.";
+}
+
+// ─── @file Context Extraction ───
+
+/**
+ * Extract @file references from message text and resolve them to ACP content blocks.
+ * Returns the cleaned text (references removed) and an array of resource_link blocks.
+ */
+export function extractFileContext(
+  text: string,
+  workspacePath: string
+): { cleanText: string; contextBlocks: Array<{ type: string; [key: string]: unknown }> } {
+  const contextBlocks: Array<{ type: string; [key: string]: unknown }> = [];
+  // Match @path/to/file or @"path with spaces"
+  const refPattern = /@(?:"([^"]+)"|(\S+\.[\w]+))/g;
+  const cleanText = text.replace(refPattern, (match, quoted, unquoted) => {
+    const filePath = quoted || unquoted;
+    const fullPath = nodePath.resolve(workspacePath, filePath);
+
+    // Safety: stay within workspace
+    if (!fullPath.startsWith(workspacePath)) {
+      return match;
+    }
+
+    try {
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile()) {
+        return match;
+      }
+      // Skip very large files (>100KB)
+      if (stat.size > 100 * 1024) {
+        return match;
+      }
+      const content = fs.readFileSync(fullPath, "utf-8");
+      contextBlocks.push({
+        type: "resource_link",
+        uri: `file://${fullPath}`,
+        name: filePath,
+        title: filePath,
+        resource: { type: "text", text: content },
+      });
+      return ""; // Remove from message text
+    } catch {
+      return match; // Keep unresolvable references as-is
+    }
+  }).replace(/\s{2,}/g, " ").trim();
+
+  return { cleanText: cleanText || text.trim(), contextBlocks };
 }
 
 // ─── Rich Update Formatting ───

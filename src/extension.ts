@@ -6,7 +6,7 @@ import { AcpClient } from "./acp";
 import { BotServer } from "./bot";
 import { openTunnel, closeTunnel, initTunnel, resetTunnel } from "./tunnel";
 import { ConversationState } from "./state";
-import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent } from "./commands";
+import { parseCommand, handleCommand, handleCardAction, formatToolCall, formatPlan, buildCompletionActions, paginateMessage, stripAnsi, hasCodeBlocks, buildCodeCard, buildDiffCard, extractDiffContent, extractFileContext } from "./commands";
 import { buildPermissionCard, shortAlias, resolveModeAlias } from "./cards";
 import type { BridgeMessage, MessageReply, ToolCallInfo, PlanInfo, PermissionRequest, ModelInfo } from "./types";
 
@@ -161,7 +161,20 @@ async function handleTeamsMessage(
   conversationState.promptCount++;
   try {
     botServer?.startTyping();
-    const raw = await acpClient.prompt(msg.text);
+
+    // Extract @file references and resolve to context blocks
+    let promptText = msg.text;
+    let contextBlocks: Array<{ type: string; [key: string]: unknown }> | undefined;
+    if (conversationState.workspacePath) {
+      const extracted = extractFileContext(msg.text, conversationState.workspacePath);
+      promptText = extracted.cleanText;
+      if (extracted.contextBlocks.length > 0) {
+        contextBlocks = extracted.contextBlocks;
+        log(`Context files: ${extracted.contextBlocks.map((b) => b.name).join(", ")}`);
+      }
+    }
+
+    const raw = await acpClient.prompt(promptText, contextBlocks);
     botServer?.stopTyping();
     const text = stripAnsi(raw);
     log(`Response: ${text.slice(0, 200)}…`);
@@ -217,6 +230,7 @@ async function startBridge(): Promise<void> {
 
   // Initialize session and capture mode/model state
   conversationState = new ConversationState();
+  conversationState.workspacePath = workspaceFolder;
   const sessionResult = await acpClient.initialize();
   conversationState.initFromSession(
     sessionResult.sessionId,
@@ -236,6 +250,13 @@ async function startBridge(): Promise<void> {
   acpClient.on("toolCall", (info: ToolCallInfo) => {
     if (info.status === "completed" && conversationState) {
       conversationState.toolCallCount++;
+      // Track file edits for /undo
+      if (info.kind === "edit") {
+        const filePath = (info.rawInput?.fileName ?? info.locations?.[0]?.path) as string | undefined;
+        if (filePath) {
+          conversationState.trackEdit(filePath, info.toolCallId);
+        }
+      }
     }
     const msg = formatToolCall(info);
     log(`[ACP] Tool: ${msg}`);
@@ -307,6 +328,31 @@ async function startBridge(): Promise<void> {
     conversationState?.setAvailableModels(models);
     log(`[ACP] Available models updated: ${models.map((m) => m.modelId).join(", ")}`);
   });
+
+  // Thinking/reasoning display — accumulate chunks and send periodically
+  let thinkingBuffer = "";
+  let thinkingTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushThinking = () => {
+    if (thinkingBuffer && botServer && conversationState?.showThinking) {
+      const chunk = thinkingBuffer.length > 500
+        ? "…" + thinkingBuffer.slice(-450)
+        : thinkingBuffer;
+      void botServer.sendProactive({ text: `💭 _${chunk}_` });
+    }
+    thinkingBuffer = "";
+    thinkingTimer = null;
+  };
+  acpClient.on("thinking", (text: string) => {
+    if (!conversationState?.showThinking) {
+      return;
+    }
+    thinkingBuffer += text;
+    // Debounce: flush every 2 seconds to avoid flooding Teams
+    if (!thinkingTimer) {
+      thinkingTimer = setTimeout(flushThinking, 2000);
+    }
+  });
+
   acpClient.on("permissionRequest", (req: PermissionRequest) => {
     if (conversationState) {
       conversationState.permissionCount++;

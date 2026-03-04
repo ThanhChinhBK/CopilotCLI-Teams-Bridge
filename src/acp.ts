@@ -180,7 +180,7 @@ export class AcpClient extends EventEmitter {
   }
 
   /** Send a prompt and collect the streamed response text. */
-  async prompt(text: string): Promise<string> {
+  async prompt(text: string, contextBlocks?: Array<{ type: string; [key: string]: unknown }>): Promise<string> {
     if (!this.process) {
       throw new Error("ACP process is not running");
     }
@@ -191,9 +191,15 @@ export class AcpClient extends EventEmitter {
     this.responseChunks = [];
     this.lastToolCallEndIndex = 0;
 
+    const prompt: Array<Record<string, unknown>> = [];
+    if (contextBlocks) {
+      prompt.push(...contextBlocks);
+    }
+    prompt.push({ type: "text", text });
+
     const res = await this.sendRpc("session/prompt", {
       sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
+      prompt,
     });
 
     if (res.error) {
@@ -432,7 +438,10 @@ export class AcpClient extends EventEmitter {
         break;
       }
       case "agent_thought_chunk": {
-        // Thinking text — silently ignore (not accumulated, not sent to user)
+        const content = update.content as Record<string, unknown> | undefined;
+        if (content?.type === "text") {
+          this.emit("thinking", content.text as string);
+        }
         break;
       }
       case "tool_call":

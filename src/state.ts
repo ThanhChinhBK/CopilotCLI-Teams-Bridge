@@ -12,6 +12,7 @@ import type {
  */
 export class ConversationState {
   sessionId: string | null = null;
+  workspacePath: string | null = null;
   currentModeId: string | null = null;
   availableModes: SessionMode[] = [];
   currentModelId: string | null = null;
@@ -21,6 +22,10 @@ export class ConversationState {
   autoApprove = false;
   /** Accumulated plan content from ACP plan events */
   latestPlan: string | null = null;
+  /** When true, forward agent thinking/reasoning chunks to Teams */
+  showThinking = false;
+  /** Files edited by tool calls in this session (for /undo). Maps path → toolCallId[] */
+  editedFiles: Map<string, string[]> = new Map();
 
   // ─── Bridge-side metrics ───
   startedAt = Date.now();
@@ -45,6 +50,15 @@ export class ConversationState {
     }
   }
 
+  /** Record a file edit for undo tracking. */
+  trackEdit(filePath: string, toolCallId?: string): void {
+    const existing = this.editedFiles.get(filePath) ?? [];
+    if (toolCallId) {
+      existing.push(toolCallId);
+    }
+    this.editedFiles.set(filePath, existing);
+  }
+
   /** Reset metrics for a new session. */
   resetMetrics(): void {
     this.startedAt = Date.now();
@@ -52,6 +66,7 @@ export class ConversationState {
     this.toolCallCount = 0;
     this.permissionCount = 0;
     this.latestPlan = null;
+    this.editedFiles = new Map();
   }
 
   /** Update mode after a successful set_mode or a CurrentModeUpdate notification. */
@@ -91,10 +106,14 @@ export class ConversationState {
       `**Model:** ${this.currentModelId ? short(this.currentModelId) : "default"} (${this.availableModels.map((m) => short(m.modelId)).join(", ") || "none advertised"})`
     );
     parts.push(`**Auto-approve:** ${this.autoApprove ? "✅ ON" : "❌ OFF"}`);
+    parts.push(`**Thinking:** ${this.showThinking ? "💭 ON" : "OFF"}`);
     parts.push(`**Uptime:** ${uptime}`);
     parts.push(`**Prompts:** ${this.promptCount}`);
     parts.push(`**Tool calls:** ${this.toolCallCount}`);
     parts.push(`**Permissions:** ${this.permissionCount}`);
+    if (this.editedFiles.size > 0) {
+      parts.push(`**Edited files:** ${this.editedFiles.size} (\`/undo\` to revert)`);
+    }
     return parts.join("\n");
   }
 }
