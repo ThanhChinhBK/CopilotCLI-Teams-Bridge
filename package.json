@@ -2,12 +2,12 @@
   "name": "copilotcli-teams-bridge",
   "displayName": "CopilotCLI-Teams Bridge",
   "description": "Connects a Microsoft Teams personal bot to your local GitHub Copilot CLI, enabling remote workspace queries via the Teams mobile app.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "nguyenchinh",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nguyenchinh/CopilotCLI-Teams-Bridge"
+    "url": "https://github.com/ThanhChinhBK/CopilotCLI-Teams-Bridge"
   },
   "icon": "icon.png",
   "engines": {
